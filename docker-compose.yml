@@ -1,0 +1,84 @@
+name: wcms-import-net-poc
+
+x-app-env: &app-env
+  ConnectionStrings__Postgres: Host=postgres;Port=5432;Username=wcms;Password=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env};Database=wcms
+  ConnectionStrings__Redis: redis:6379
+  SOURCE_BASE_URL: http://mock-cms:5000
+  UPSTREAM_URL: http://mock-upstream:4000/hook
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET in .env}
+  BATCH_SIZE: "10"
+
+# One image for every app service. init: dotnet must not be PID 1, which ignores default-action signals,
+# so a killed or crashed process would hang instead of exiting and being restarted.
+x-app: &app
+  build: .
+  init: true
+
+x-deps: &deps
+  postgres: { condition: service_healthy }
+  redis: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wcms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: wcms
+    volumes:
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:5434:5432"   # host 5432 and 5433 are often taken by other local Postgres containers
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wcms -d wcms"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # "API to Import" + "Job Queue Service"
+  api:
+    <<: *app
+    command: ["api"]
+    environment: *app-env
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: *deps
+
+  # "Import Service" (consumes the Redis Stream) + "Import worker" (transform, validate, load)
+  importer:
+    <<: *app
+    restart: unless-stopped   # so the "simulated crash" demo comes back by itself
+    command: ["importer"]
+    environment: *app-env
+    depends_on: *deps
+
+  # "Notification service" (polls the outbox table)
+  notifier:
+    <<: *app
+    command: ["notifier"]
+    environment: *app-env
+    depends_on: *deps
+
+  # "Source CMS": the customer's old system (fake)
+  mock-cms:
+    <<: *app
+    command: ["mock-cms"]
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  # "Upstream": a system that wants to hear about new content (fake)
+  mock-upstream:
+    <<: *app
+    command: ["mock-upstream"]
+    environment:
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET in .env}
+    ports:
+      - "127.0.0.1:4000:4000"

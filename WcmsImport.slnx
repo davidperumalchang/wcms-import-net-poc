@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WcmsImport/WcmsImport.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WcmsImport.E2ETests/WcmsImport.E2ETests.csproj" />
+    <Project Path="tests/WcmsImport.UnitTests/WcmsImport.UnitTests.csproj" />
+  </Folder>
+</Solution>
